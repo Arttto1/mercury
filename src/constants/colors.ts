@@ -1,0 +1,20 @@
+export const COLORS = {
+  primary: "#810CD2",
+  error: "#FF3B30",
+  success: "#34C759",
+  warning: "#FF9500",
+  white: "#FFFFFF",
+  black: "#000000",
+  gray: {
+    50: "#F8F9FA",
+    100: "#F5F5F5",
+    200: "#EEEEEE",
+    300: "#E0E0E0",
+    400: "#BDBDBD",
+    500: "#9E9E9E",
+    600: "#666666",
+    700: "#424242",
+    800: "#333333",
+    900: "#212121",
+  },
+};
