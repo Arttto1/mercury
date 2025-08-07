@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -13,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
+import { alertService } from "../services";
 
 export const LoginScreen: React.FC = () => {
   const [username, setUsername] = useState("");
@@ -25,7 +25,7 @@ export const LoginScreen: React.FC = () => {
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
-      Alert.alert("Erro", "Por favor, preencha todos os campos");
+      alertService.error("Erro", "Por favor, preencha todos os campos");
       return;
     }
 
@@ -33,7 +33,7 @@ export const LoginScreen: React.FC = () => {
       setIsLoading(true);
       await login({ username: username.trim(), password });
     } catch (error) {
-      Alert.alert("Erro", "Credenciais inválidas. Tente novamente.");
+      alertService.invalidCredentials();
     } finally {
       setIsLoading(false);
     }
@@ -50,7 +50,7 @@ export const LoginScreen: React.FC = () => {
       <View style={styles.content}>
         <View style={styles.logoContainer}>
           <Ionicons name="car-sport" size={80} color="#810CD2" />
-          <Text style={styles.title}>CarroApp</Text>
+          <Text style={styles.title}>Autosintese</Text>
           <Text style={styles.subtitle}>Gestão de Concessionária</Text>
         </View>
 

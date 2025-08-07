@@ -1,20 +1,23 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   Image,
   Dimensions,
+  Modal,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { StackNavigationProp } from "@react-navigation/stack";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Vehicle, RootStackParamList } from "../types";
-import { apiService } from "../services/apiService";
+import { apiService, alertService } from "../services";
+import { getImageUrl } from "../utils/imageUtils";
+import { useAuth } from "../contexts/AuthContext";
 
 type NavigationProp = StackNavigationProp<RootStackParamList, "VehicleDetails">;
 type RouteProps = RouteProp<RootStackParamList, "VehicleDetails">;
@@ -25,26 +28,55 @@ export const VehicleDetailsScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProps>();
   const insets = useSafeAreaInsets();
+  const { vehicles, deleteVehicle } = useAuth();
 
-  const { vehicle } = route.params;
+  // Buscar o veículo mais atualizado do contexto usando o ID da rota
+  const vehicleId = route.params.vehicle.id;
+  const vehicle =
+    vehicles.find((v) => v.id === vehicleId) || route.params.vehicle;
+
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [isImageModalVisible, setIsImageModalVisible] = useState(false);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string>("");
+  const [imageLoadingStates, setImageLoadingStates] = useState<{
+    [key: string]: boolean;
+  }>({});
+  const scrollViewRef = useRef<ScrollView>(null);
 
-  const images = [
-    vehicle.foto1,
-    vehicle.foto2,
-    vehicle.foto3,
-    vehicle.foto4,
-    vehicle.foto5,
-    vehicle.foto6,
-    vehicle.foto7,
-    vehicle.foto8,
-    vehicle.foto9,
-    vehicle.foto10,
-    vehicle.foto11,
-    vehicle.foto12,
-  ].filter(Boolean) as string[];
+  // Recalcular imagens sempre que o veículo for atualizado
+  const images = useMemo(() => {
+    return [
+      vehicle.foto1,
+      vehicle.foto2,
+      vehicle.foto3,
+      vehicle.foto4,
+      vehicle.foto5,
+      vehicle.foto6,
+      vehicle.foto7,
+      vehicle.foto8,
+      vehicle.foto9,
+      vehicle.foto10,
+      vehicle.foto11,
+      vehicle.foto12,
+    ].filter(
+      (img): img is string =>
+        Boolean(img) && typeof img === "string" && img.trim() !== ""
+    );
+  }, [vehicle]);
+
+  // Resetar índice da imagem se necessário quando as imagens mudarem
+  useEffect(() => {
+    if (currentImageIndex >= images.length && images.length > 0) {
+      setCurrentImageIndex(0);
+    }
+    // Resetar estados de loading das imagens quando mudarem
+    setImageLoadingStates({});
+  }, [images, currentImageIndex]);
 
   const formatPrice = (price: number) => {
+    if (price === undefined || price === null || isNaN(price)) {
+      return "R$ 0,00";
+    }
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
       currency: "BRL",
@@ -52,6 +84,9 @@ export const VehicleDetailsScreen: React.FC = () => {
   };
 
   const formatKm = (km: number) => {
+    if (km === undefined || km === null || isNaN(km)) {
+      return "0";
+    }
     return new Intl.NumberFormat("pt-BR").format(km);
   };
 
@@ -60,26 +95,41 @@ export const VehicleDetailsScreen: React.FC = () => {
   };
 
   const handleDelete = () => {
-    Alert.alert(
-      "Confirmar Exclusão",
-      "Deseja excluir este veículo? Esta ação não pode ser desfeita.",
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Excluir",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await apiService.deleteVehicle(vehicle.id);
-              Alert.alert("Sucesso", "Veículo excluído com sucesso");
-              navigation.goBack();
-            } catch (error) {
-              Alert.alert("Erro", "Não foi possível excluir o veículo");
-            }
-          },
-        },
-      ]
-    );
+    alertService.confirmDeleteVehicle(vehicle.nomeModelo, async () => {
+      try {
+        await deleteVehicle(vehicle);
+        // Voltar instantaneamente sem mostrar alerta de sucesso
+        navigation.goBack();
+      } catch (error) {
+        alertService.error("Erro", "Não foi possível excluir o veículo");
+      }
+    });
+  };
+
+  const handleImagePress = (imageUrl: string) => {
+    setSelectedImageUrl(imageUrl);
+    setIsImageModalVisible(true);
+  };
+
+  const setImageLoading = (imageUrl: string, isLoading: boolean) => {
+    setImageLoadingStates((prev) => ({
+      ...prev,
+      [imageUrl]: isLoading,
+    }));
+  };
+
+  const isImageLoading = (imageUrl: string) => {
+    return imageLoadingStates[imageUrl] || false;
+  };
+
+  const handleScroll = (event: any) => {
+    const contentOffsetX = event.nativeEvent.contentOffset.x;
+    const index = Math.round(contentOffsetX / width);
+
+    // Garante que o índice está dentro dos limites válidos
+    if (index >= 0 && index < images.length && index !== currentImageIndex) {
+      setCurrentImageIndex(index);
+    }
   };
 
   const renderImageGallery = () => {
@@ -95,24 +145,45 @@ export const VehicleDetailsScreen: React.FC = () => {
     return (
       <View style={styles.imageGallery}>
         <ScrollView
+          ref={scrollViewRef}
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
-          onMomentumScrollEnd={(event) => {
-            const index = Math.floor(event.nativeEvent.contentOffset.x / width);
-            setCurrentImageIndex(index);
-          }}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
         >
-          {images.map((image, index) => (
-            <Image key={index} source={{ uri: image }} style={styles.image} />
-          ))}
+          {images.map((image, index) => {
+            const imageUrl = getImageUrl(image);
+            return imageUrl ? (
+              <View key={`image-${index}`} style={styles.imageContainer}>
+                {isImageLoading(imageUrl) && (
+                  <View style={styles.imageLoadingOverlay}>
+                    <ActivityIndicator size="large" color="#810CD2" />
+                  </View>
+                )}
+                <TouchableOpacity
+                  onPress={() => handleImagePress(imageUrl)}
+                  activeOpacity={0.9}
+                  style={styles.imageWrapper}
+                >
+                  <Image
+                    source={{ uri: imageUrl }}
+                    style={styles.image}
+                    onLoadStart={() => setImageLoading(imageUrl, true)}
+                    onLoad={() => setImageLoading(imageUrl, false)}
+                    onError={() => setImageLoading(imageUrl, false)}
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : null;
+          })}
         </ScrollView>
 
         {images.length > 1 && (
           <View style={styles.imageIndicators}>
             {images.map((_, index) => (
               <View
-                key={index}
+                key={`indicator-${index}`}
                 style={[
                   styles.indicator,
                   currentImageIndex === index && styles.activeIndicator,
@@ -125,10 +196,18 @@ export const VehicleDetailsScreen: React.FC = () => {
     );
   };
 
+  const renderSkeletonLoader = () => (
+    <View style={styles.skeletonContainer}>
+      <ActivityIndicator size="small" color="#810CD2" />
+      <Text style={styles.skeletonText}>Carregando...</Text>
+    </View>
+  );
+
   const renderDetailRow = (
     label: string,
     value: string | number,
-    icon?: string
+    icon?: string,
+    isLoading?: boolean
   ) => (
     <View style={styles.detailRow}>
       <View style={styles.detailLabel}>
@@ -142,7 +221,11 @@ export const VehicleDetailsScreen: React.FC = () => {
         )}
         <Text style={styles.detailLabelText}>{label}</Text>
       </View>
-      <Text style={styles.detailValue}>{value}</Text>
+      {isLoading ? (
+        renderSkeletonLoader()
+      ) : (
+        <Text style={styles.detailValue}>{value}</Text>
+      )}
     </View>
   );
 
@@ -170,7 +253,11 @@ export const VehicleDetailsScreen: React.FC = () => {
 
         <View style={styles.infoContainer}>
           <View style={styles.titleSection}>
-            <Text style={styles.vehicleTitle}>{vehicle.nomeModelo}</Text>
+            <Text style={styles.vehicleTitle}>
+              {vehicle._plateRelatedLoading
+                ? "Carregando..."
+                : vehicle.nomeModelo}
+            </Text>
             <Text style={styles.vehiclePrice}>
               {formatPrice(vehicle.preco)}
             </Text>
@@ -179,7 +266,11 @@ export const VehicleDetailsScreen: React.FC = () => {
           <View style={styles.quickInfo}>
             <View style={styles.quickInfoItem}>
               <Ionicons name="calendar" size={16} color="#666" />
-              <Text style={styles.quickInfoText}>{vehicle.anoModelo}</Text>
+              {vehicle._plateRelatedLoading ? (
+                renderSkeletonLoader()
+              ) : (
+                <Text style={styles.quickInfoText}>{vehicle.anoModelo}</Text>
+              )}
             </View>
             <View style={styles.quickInfoItem}>
               <Ionicons name="speedometer" size={16} color="#666" />
@@ -189,25 +280,34 @@ export const VehicleDetailsScreen: React.FC = () => {
             </View>
             <View style={styles.quickInfoItem}>
               <Ionicons name="color-palette" size={16} color="#666" />
-              <Text style={styles.quickInfoText}>{vehicle.cor}</Text>
+              {vehicle._plateRelatedLoading ? (
+                renderSkeletonLoader()
+              ) : (
+                <Text style={styles.quickInfoText}>{vehicle.cor}</Text>
+              )}
             </View>
           </View>
 
           <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>Informações Detalhadas</Text>
 
-            {renderDetailRow("Placa", vehicle.placaVeiculo, "card")}
-            {renderDetailRow("Tipo", vehicle.tipoVeiculo, "car")}
+            {renderDetailRow("Placa", vehicle.placaVeiculo || "N/I", "card")}
+            {renderDetailRow("Tipo", vehicle.tipoVeiculo || "N/I", "car")}
             {renderDetailRow(
               "Ano de Fabricação",
-              vehicle.anoFabricacao.toString(),
-              "build"
+              (vehicle.anoFabricacao || 0).toString(),
+              "build",
+              vehicle._plateRelatedLoading
             )}
-            {renderDetailRow("Combustível", vehicle.combustivel, "flash")}
             {renderDetailRow(
-              "Quantidade",
-              vehicle.quantidade.toString(),
-              "cube"
+              "Combustível",
+              vehicle.combustivel || "N/I",
+              "flash"
+            )}
+            {renderDetailRow(
+              "Interessados",
+              (vehicle.interessados || 0).toString(),
+              "people"
             )}
 
             {vehicle.observacao && (
@@ -225,11 +325,60 @@ export const VehicleDetailsScreen: React.FC = () => {
           <Ionicons name="trash" size={20} color="#fff" />
           <Text style={styles.deleteButtonText}>Excluir</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.editButton} onPress={handleEdit}>
-          <Ionicons name="create" size={20} color="#fff" />
-          <Text style={styles.editButtonText}>Editar</Text>
+        <TouchableOpacity
+          style={[
+            styles.editButton,
+            vehicle._isUpdating && styles.editButtonLoading,
+          ]}
+          onPress={handleEdit}
+          disabled={vehicle._isUpdating}
+        >
+          {vehicle._isUpdating ? (
+            <>
+              <ActivityIndicator size="small" color="#fff" />
+              <Text style={styles.editButtonText}>Salvando...</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="create" size={20} color="#fff" />
+              <Text style={styles.editButtonText}>Editar</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
+
+      {/* Modal de visualização de imagem */}
+      <Modal
+        visible={isImageModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsImageModalVisible(false)}
+      >
+        <View style={styles.imageModalOverlay}>
+          <TouchableOpacity
+            style={styles.imageModalCloseArea}
+            onPress={() => setIsImageModalVisible(false)}
+            activeOpacity={1}
+          >
+            <View style={styles.imageModalContainer}>
+              <TouchableOpacity
+                style={styles.imageModalCloseButton}
+                onPress={() => setIsImageModalVisible(false)}
+              >
+                <Ionicons name="close" size={30} color="#fff" />
+              </TouchableOpacity>
+
+              {selectedImageUrl ? (
+                <Image
+                  source={{ uri: selectedImageUrl }}
+                  style={styles.imageModalImage}
+                  resizeMode="contain"
+                />
+              ) : null}
+            </View>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -422,5 +571,75 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
+  },
+  // Estilos do modal de imagem
+  imageModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  imageModalCloseArea: {
+    flex: 1,
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  imageModalContainer: {
+    width: "90%",
+    height: "80%",
+    position: "relative",
+  },
+  imageModalCloseButton: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    borderRadius: 20,
+    padding: 8,
+  },
+  imageModalImage: {
+    width: "100%",
+    height: "100%",
+  },
+  skeletonContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f5f5f5",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    minWidth: 80,
+  },
+  skeletonText: {
+    marginLeft: 6,
+    fontSize: 12,
+    color: "#666",
+  },
+  imageContainer: {
+    position: "relative",
+    width: width,
+    height: 250,
+  },
+  imageWrapper: {
+    width: "100%",
+    height: "100%",
+  },
+  imageLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(248, 248, 248, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1,
+    borderRadius: 8,
+  },
+  editButtonLoading: {
+    backgroundColor: "#B888F5", // Cor mais clara quando em loading
+    opacity: 0.8,
   },
 });

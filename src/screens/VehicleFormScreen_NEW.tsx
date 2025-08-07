@@ -25,7 +25,6 @@ import {
   isPlateRelatedField,
   EDITABLE_FIELDS,
   IMAGE_FIELDS,
-  PLATE_RELATED_FIELDS,
   applyOptimisticUpdate,
   mergeApiResponse,
 } from "../utils/vehicleEditUtils";
@@ -93,8 +92,6 @@ export const VehicleFormScreen: React.FC = () => {
   const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>(
     {}
   );
-  const [isLoadingAdditionalPhotos, setIsLoadingAdditionalPhotos] =
-    useState(false);
   const [priceDisplay, setPriceDisplay] = useState<string>("");
   const [kmDisplay, setKmDisplay] = useState<string>("");
 
@@ -121,26 +118,30 @@ export const VehicleFormScreen: React.FC = () => {
       ...prev,
       [field]: value,
     }));
+
+    // Se estamos em modo de edição, aplicar atualização otimista
+    if (isEditMode && originalVehicle) {
+      handleOptimisticUpdate(field, value);
+    }
   };
 
   const handleOptimisticUpdate = async (field: keyof Vehicle, value: any) => {
     if (!originalVehicle) return;
 
     const updates: Partial<Vehicle> = { [field]: value };
-    const isPlateChange = field === "placaVeiculo";
+    const isPlateRelated = field === "placaVeiculo";
 
-    // Se mudou a placa, marcar campos relacionados à placa como loading
-    if (isPlateChange) {
-      // Aplicar skeleton/loading nos campos que dependem da placa
+    // Aplicar atualização otimista imediatamente para campos editáveis e imagens
+    if (EDITABLE_FIELDS.includes(field) || IMAGE_FIELDS.includes(field)) {
+      updateVehicleOptimistic(originalVehicle.id, updates, isPlateRelated);
+    }
+    // Para mudança de placa, aplicar skeleton nos campos relacionados
+    else if (isPlateRelated) {
       const plateRelatedUpdates: Partial<Vehicle> = {
-        [field]: value, // Atualizar a placa imediatamente
-        _plateRelatedLoading: true, // Flag para mostrar skeleton nos campos relacionados
+        placaVeiculo: value,
+        _plateRelatedLoading: true,
       };
       updateVehicleOptimistic(originalVehicle.id, plateRelatedUpdates, true);
-    }
-    // Se é um campo editável independente, aplicar atualização otimista imediata
-    else if (EDITABLE_FIELDS.includes(field) || IMAGE_FIELDS.includes(field)) {
-      updateVehicleOptimistic(originalVehicle.id, updates, false);
     }
 
     // Criar e enviar payload para API
@@ -154,6 +155,7 @@ export const VehicleFormScreen: React.FC = () => {
 
       // Só enviar se há mudanças reais
       if (Object.keys(payload).length > 2 || payload.images?.length) {
+        // mais que id e vehicleName
         const apiResponse = await apiService.updateVehicleOptimistic(payload);
 
         // Mesclar resposta da API com veículo atual
@@ -163,12 +165,6 @@ export const VehicleFormScreen: React.FC = () => {
           [field]: value,
         };
         const updatedVehicle = mergeApiResponse(currentVehicle, apiResponse);
-
-        // Se foi mudança de placa, remover o flag de loading dos campos relacionados
-        if (isPlateChange) {
-          updatedVehicle._plateRelatedLoading = false;
-        }
-
         updateVehicle(originalVehicle.id, updatedVehicle);
       }
     } catch (error) {
@@ -177,61 +173,6 @@ export const VehicleFormScreen: React.FC = () => {
 
       // Reverter atualização otimista em caso de erro
       updateVehicleOptimistic(originalVehicle.id, originalVehicle, false);
-    }
-  };
-
-  const saveEdit = async () => {
-    if (!isEditMode || !originalVehicle) return;
-
-    setIsLoading(true);
-
-    try {
-      // Aplicar atualização otimista imediatamente
-      updateVehicleOptimistic(originalVehicle.id, formData, false);
-
-      // Criar payload para API
-      const payload = await createUpdatePayload(
-        originalVehicle.id,
-        originalVehicle.nomeModelo,
-        originalVehicle,
-        formData
-      );
-
-      // Verificar se há mudanças reais
-      const hasFieldChanges = Object.keys(payload).length > 2;
-      const hasImageChanges = payload.images && payload.images.length > 0;
-
-      if (hasFieldChanges || hasImageChanges) {
-        // VOLTAR IMEDIATAMENTE - não esperar a API
-        navigation.goBack();
-
-        // Chamar API em background
-        apiService
-          .updateVehicleOptimistic(payload)
-          .then((apiResponse) => {
-            // Mesclar resposta da API quando chegar
-            const updatedVehicle = mergeApiResponse(
-              { ...originalVehicle, ...formData },
-              apiResponse
-            );
-            updateVehicle(originalVehicle.id, updatedVehicle);
-          })
-          .catch((error) => {
-            console.error("Erro na atualização:", error);
-            // Reverter atualização otimista em caso de erro
-            updateVehicleOptimistic(originalVehicle.id, originalVehicle, false);
-            alertService.error("Erro", "Falha ao atualizar veículo");
-          });
-      } else {
-        alertService.info("Informação", "Nenhuma alteração foi detectada.");
-        navigation.goBack();
-      }
-    } catch (error) {
-      console.error("Erro na criação do payload:", error);
-      alertService.error("Erro", "Falha ao processar alterações");
-      navigation.goBack();
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -248,70 +189,27 @@ export const VehicleFormScreen: React.FC = () => {
     );
   };
 
-  const hasChanges = (): boolean => {
-    if (!isEditMode || !originalVehicle) return true;
-
-    // Criar uma cópia do estado atual para comparação
-    const currentData = { ...formData };
-    const originalData = { ...originalVehicle };
-
-    // Verificar campos básicos
-    const basicFieldsChanged =
-      currentData.placaVeiculo !== originalData.placaVeiculo ||
-      currentData.km !== originalData.km ||
-      currentData.preco !== originalData.preco ||
-      currentData.observacao !== originalData.observacao ||
-      currentData.tipoVeiculo !== originalData.tipoVeiculo ||
-      currentData.combustivel !== originalData.combustivel;
-
-    // Verificar todas as fotos (foto1 até foto12)
-    const allPhotoFields = [
-      "foto1",
-      "foto2",
-      "foto3",
-      "foto4",
-      "foto5",
-      "foto6",
-      "foto7",
-      "foto8",
-      "foto9",
-      "foto10",
-      "foto11",
-      "foto12",
-    ] as const;
-
-    const photosChanged = allPhotoFields.some((field) => {
-      const currentPhoto = currentData[field] || "";
-      const originalPhoto = originalData[field] || "";
-      return currentPhoto !== originalPhoto;
-    });
-
-    return basicFieldsChanged || photosChanged;
-  };
-
-  const handleSavePress = () => {
-    if (isEditMode) {
-      saveEdit();
-    } else {
-      // Modo criação - sempre permitir clique para feedback
-      saveVehicle();
-    }
-  };
-
   const isButtonDisabled = (): boolean => {
-    if (isLoading) return true;
-    if (isEditMode) return !hasChanges(); // Desabilitar se não há mudanças em modo edição
-    return !hasRequiredFields(); // Desabilitar se faltam campos obrigatórios em modo criação
-  };
-
-  const shouldButtonLookDisabled = (): boolean => {
-    if (isLoading) return true;
-    if (isEditMode) return !hasChanges(); // Aparência desabilitada se não há mudanças
-    return !hasRequiredFields(); // Aparência desabilitada se faltam campos obrigatórios
+    return isLoading || (!isEditMode && !hasRequiredFields());
   };
 
   const getDisabledMessage = (): string => {
-    // Não mostrar nenhuma mensagem abaixo do botão
+    if (isLoading) return "";
+    if (isEditMode) return ""; // Em modo de edição, não mostrar mensagem
+
+    if (!hasRequiredFields()) {
+      const missing: string[] = [];
+      if (!formData.placaVeiculo?.trim()) missing.push("Placa");
+      if (!formData.preco || formData.preco <= 0) missing.push("Preço");
+      if (!formData.tipoVeiculo?.trim()) missing.push("Tipo");
+      if (!formData.combustivel?.trim()) missing.push("Combustível");
+      if (!formData.foto1) missing.push("Foto 1");
+      if (!formData.foto2) missing.push("Foto 2");
+      if (!formData.foto3) missing.push("Foto 3");
+
+      return `Campos obrigatórios não preenchidos: ${missing.join(", ")}`;
+    }
+
     return "";
   };
 
@@ -394,7 +292,6 @@ export const VehicleFormScreen: React.FC = () => {
 
       if (!result.canceled && result.assets) {
         if (result.assets.length === 1) {
-          // Uma imagem - sempre substitui o campo clicado (se houver)
           if (
             photoKey &&
             (photoKey === "foto1" ||
@@ -402,14 +299,16 @@ export const VehicleFormScreen: React.FC = () => {
               photoKey === "foto3")
           ) {
             setImageLoading((prev) => ({ ...prev, [photoKey]: true }));
-            await handleSingleImage(result.assets[0], photoKey);
-          } else {
-            // Sem photoKey específico - adicionar às fotos dinâmicas
-            handleMultipleImages(result.assets);
+          } else if (
+            typeof photoKey === "string" &&
+            photoKey.startsWith("photo-")
+          ) {
+            setImageLoading((prev) => ({ ...prev, [photoKey]: true }));
           }
+
+          await handleSingleImage(result.assets[0], photoKey);
         } else {
-          // Múltiplas imagens - lógica inteligente
-          await handleIntelligentMultipleImages(result.assets, photoKey);
+          handleMultipleImages(result.assets);
         }
       }
     } catch (error) {
@@ -428,13 +327,7 @@ export const VehicleFormScreen: React.FC = () => {
         photoKey &&
         (photoKey === "foto1" || photoKey === "foto2" || photoKey === "foto3")
       ) {
-        // Atualizar estado local
         updateField(photoKey as keyof Vehicle, optimizedUri);
-
-        // Se estamos em modo de edição, aplicar atualização otimística também
-        if (isEditMode && originalVehicle) {
-          handleOptimisticUpdate(photoKey as keyof Vehicle, optimizedUri);
-        }
       } else if (
         typeof photoKey === "string" &&
         photoKey.startsWith("photo-")
@@ -462,98 +355,20 @@ export const VehicleFormScreen: React.FC = () => {
     }
   };
 
-  const handleIntelligentMultipleImages = async (
-    assets: any[],
-    clickedPhotoKey?: "foto1" | "foto2" | "foto3" | string
-  ) => {
-    let remainingAssets = [...assets];
-
-    // 1. Se clicou em um campo específico (foto1, foto2, foto3), a primeira imagem substitui esse campo
-    if (
-      clickedPhotoKey &&
-      (clickedPhotoKey === "foto1" ||
-        clickedPhotoKey === "foto2" ||
-        clickedPhotoKey === "foto3")
-    ) {
-      setImageLoading((prev) => ({ ...prev, [clickedPhotoKey]: true }));
-
-      try {
-        await handleSingleImage(remainingAssets[0], clickedPhotoKey);
-        remainingAssets = remainingAssets.slice(1); // Remove a primeira imagem já processada
-      } catch (error) {
-        console.error("Erro ao processar imagem do campo clicado:", error);
-      }
-    }
-
-    // 2. Para as imagens restantes, primeiro tentar preencher campos vazios (foto1, foto2, foto3)
-    const mainPhotoKeys = ["foto1", "foto2", "foto3"] as const;
-
-    for (const photoKey of mainPhotoKeys) {
-      if (remainingAssets.length === 0) break;
-
-      // Pular o campo que já foi preenchido acima
-      if (photoKey === clickedPhotoKey) continue;
-
-      // Se o campo está vazio, preencher
-      if (!formData[photoKey]) {
-        setImageLoading((prev) => ({ ...prev, [photoKey]: true }));
-
-        try {
-          await handleSingleImage(remainingAssets[0], photoKey);
-          remainingAssets = remainingAssets.slice(1);
-        } catch (error) {
-          console.error(`Erro ao processar imagem para ${photoKey}:`, error);
-        }
-      }
-    }
-
-    // 3. Se ainda sobraram imagens, adicionar às fotos dinâmicas
-    if (remainingAssets.length > 0) {
-      await handleMultipleImages(remainingAssets);
-    }
-  };
-
   const handleMultipleImages = async (assets: any[]) => {
-    setIsLoadingAdditionalPhotos(true);
+    const newPhotos: DynamicPhoto[] = [];
 
-    // Encontrar próximos campos de foto disponíveis (foto4 até foto12)
-    const photoFields = [
-      "foto4",
-      "foto5",
-      "foto6",
-      "foto7",
-      "foto8",
-      "foto9",
-      "foto10",
-      "foto11",
-      "foto12",
-    ] as const;
-
-    for (let i = 0; i < assets.length && i < photoFields.length; i++) {
-      const asset = assets[i];
-      const photoField = photoFields[i];
-
+    for (const asset of assets) {
       try {
         const optimizedUri = await optimizeImage(asset.uri);
-
-        // Atualizar estado local
-        updateField(photoField, optimizedUri);
-
-        // Se estamos em modo de edição, aplicar atualização otimística também
-        if (isEditMode && originalVehicle) {
-          handleOptimisticUpdate(photoField, optimizedUri);
-        }
-
-        // Pequeno delay para garantir processamento sequencial
-        if (i < assets.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        const newId = `photo-${Date.now()}-${Math.random()}`;
+        newPhotos.push({ id: newId, uri: optimizedUri });
       } catch (error) {
-        console.error(`Erro ao processar imagem para ${photoField}:`, error);
+        console.error("Erro ao processar imagem:", error);
       }
     }
 
-    setIsLoadingAdditionalPhotos(false);
+    setDynamicPhotos((prev) => [...prev, ...newPhotos]);
   };
 
   const openCamera = async (
@@ -613,45 +428,7 @@ export const VehicleFormScreen: React.FC = () => {
   };
 
   const removeMainPhoto = (photoKey: "foto1" | "foto2" | "foto3") => {
-    // Atualizar estado local
     updateField(photoKey, "");
-
-    // Se estamos em modo de edição, aplicar atualização otimística também
-    if (isEditMode && originalVehicle) {
-      handleOptimisticUpdate(photoKey, "");
-    }
-  };
-
-  const getAdditionalPhotos = () => {
-    const photoFields = [
-      "foto4",
-      "foto5",
-      "foto6",
-      "foto7",
-      "foto8",
-      "foto9",
-      "foto10",
-      "foto11",
-      "foto12",
-    ] as const;
-
-    return photoFields
-      .map((field) => ({ field, uri: formData[field] as string }))
-      .filter((photo) => photo.uri && photo.uri.trim() !== "");
-  };
-
-  const getAdditionalPhotosCount = () => {
-    return getAdditionalPhotos().length;
-  };
-
-  const removeAdditionalPhoto = (photoField: string) => {
-    // Atualizar o estado local imediatamente
-    updateField(photoField as keyof Vehicle, "");
-
-    // Se estamos em modo de edição, aplicar a atualização otimista imediatamente
-    if (isEditMode && originalVehicle) {
-      handleOptimisticUpdate(photoField as keyof Vehicle, "");
-    }
   };
 
   const saveVehicle = async () => {
@@ -663,19 +440,7 @@ export const VehicleFormScreen: React.FC = () => {
 
     // Lógica original para criação de novo veículo
     if (!hasRequiredFields()) {
-      const missing: string[] = [];
-      if (!formData.placaVeiculo?.trim()) missing.push("Placa");
-      if (!formData.preco || formData.preco <= 0) missing.push("Preço");
-      if (!formData.tipoVeiculo?.trim()) missing.push("Tipo");
-      if (!formData.combustivel?.trim()) missing.push("Combustível");
-      if (!formData.foto1) missing.push("Foto 1");
-      if (!formData.foto2) missing.push("Foto 2");
-      if (!formData.foto3) missing.push("Foto 3");
-
-      alertService.error(
-        "Campos Obrigatórios",
-        `Por favor, preencha os seguintes campos: ${missing.join(", ")}`
-      );
+      alertService.error("Erro", getDisabledMessage());
       return;
     }
 
@@ -692,17 +457,30 @@ export const VehicleFormScreen: React.FC = () => {
       // Adiciona otimisticamente à lista
       addVehicleOptimistic(tempVehicle);
 
-      // Volta para a lista imediatamente após adição otimista
-      navigation.goBack();
+      // Preparar dados das fotos dinâmicas
+      const dynamicPhotosData = await Promise.all(
+        dynamicPhotos.map(async (photo, index) => {
+          try {
+            return await convertImageToStructuredObject(photo.uri, index + 4);
+          } catch (error) {
+            console.error(`Erro ao converter foto dinâmica ${index}:`, error);
+            return null;
+          }
+        })
+      );
 
-      // Salvar veículo na API
-      const savedVehicle = await apiService.createVehicle(formData as Vehicle);
+      const validDynamicPhotos = dynamicPhotosData.filter(Boolean);
 
-      // Remove o veículo temporário e adiciona o real
-      removeVehicle(tempId);
+      const vehicleToSave = {
+        ...formData,
+        dynamicPhotos: validDynamicPhotos,
+      } as Vehicle;
+
+      const savedVehicle = await apiService.createVehicle(vehicleToSave);
       addVehicle(savedVehicle);
 
       // Não mostrar mais o alerta de sucesso - removido conforme solicitado
+      navigation.goBack();
     } catch (error) {
       console.error("Erro ao salvar veículo:", error);
       const tempId = `temp-${Date.now()}`;
@@ -724,11 +502,13 @@ export const VehicleFormScreen: React.FC = () => {
     return (
       <View key={photoKey} style={styles.photoSlot}>
         <Text style={styles.photoLabel}>
-          {label}
-          {isRequired && <Text style={styles.asterisk}> *</Text>}
+          {label} {isRequired && <Text style={styles.required}>*</Text>}
         </Text>
         <TouchableOpacity
-          style={styles.photoContainer}
+          style={[
+            styles.photoContainer,
+            isRequired && !photoUri && styles.photoContainerRequired,
+          ]}
           onPress={() => pickImage(photoKey)}
           disabled={isLoadingPhoto}
         >
@@ -758,8 +538,26 @@ export const VehicleFormScreen: React.FC = () => {
     );
   };
 
+  const renderSkeletonField = (label: string) => (
+    <View style={styles.formGroup}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={styles.skeletonInput}>
+        <ActivityIndicator size="small" color="#810CD2" />
+        <Text style={styles.skeletonText}>Carregando...</Text>
+      </View>
+    </View>
+  );
+
+  const shouldShowSkeleton = (field: keyof Vehicle): boolean => {
+    return (
+      isEditMode &&
+      !!originalVehicle?._plateRelatedLoading &&
+      isPlateRelatedField(field)
+    );
+  };
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
@@ -769,7 +567,7 @@ export const VehicleFormScreen: React.FC = () => {
 
           <View style={styles.formGroup}>
             <Text style={styles.label}>
-              Placa do Veículo<Text style={styles.asterisk}> *</Text>
+              Placa do Veículo <Text style={styles.required}>*</Text>
             </Text>
             <TextInput
               style={styles.input}
@@ -779,65 +577,97 @@ export const VehicleFormScreen: React.FC = () => {
               autoCapitalize="characters"
               maxLength={7}
             />
-            {!isEditMode && (
-              <Text style={styles.infoText}>
-                As informações do veículo serão preenchidas automaticamente com
-                base na placa
-              </Text>
-            )}
           </View>
 
-          <View style={styles.rowContainer}>
-            <View style={styles.halfWidth}>
-              <Text style={styles.label}>Quilometragem</Text>
+          {shouldShowSkeleton("nomeModelo") ? (
+            renderSkeletonField("Nome/Modelo")
+          ) : (
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Nome/Modelo</Text>
               <TextInput
-                style={styles.input}
-                value={kmDisplay}
-                onChangeText={updateKm}
-                placeholder="0"
-                keyboardType="numeric"
+                style={[styles.input, isEditMode && styles.inputDisabled]}
+                value={formData.nomeModelo}
+                onChangeText={(text) => updateField("nomeModelo", text)}
+                placeholder="Nome será preenchido automaticamente"
+                editable={!isEditMode}
               />
             </View>
+          )}
 
-            <View style={styles.halfWidth}>
+          {shouldShowSkeleton("tipoVeiculo") ? (
+            renderSkeletonField("Tipo de Veículo")
+          ) : (
+            <View style={styles.formGroup}>
               <Text style={styles.label}>
-                Preço<Text style={styles.asterisk}> *</Text>
+                Tipo de Veículo <Text style={styles.required}>*</Text>
               </Text>
               <TextInput
-                style={styles.input}
-                value={priceDisplay}
-                onChangeText={updatePrice}
-                placeholder="0"
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
-
-          <View style={styles.rowContainer}>
-            <View style={styles.halfWidth}>
-              <Text style={styles.label}>
-                Combustível<Text style={styles.asterisk}> *</Text>
-              </Text>
-              <TextInput
-                style={styles.input}
-                value={formData.combustivel}
-                onChangeText={(text) => updateField("combustivel", text)}
-                placeholder="Flex..."
-              />
-            </View>
-
-            <View style={styles.halfWidth}>
-              <Text style={styles.label}>
-                Tipo<Text style={styles.asterisk}> *</Text>
-              </Text>
-              <TextInput
-                style={styles.input}
+                style={[styles.input, isEditMode && styles.inputDisabled]}
                 value={formData.tipoVeiculo}
                 onChangeText={(text) => updateField("tipoVeiculo", text)}
-                placeholder="Sedan, SUV..."
+                placeholder="Tipo será preenchido automaticamente"
+                editable={!isEditMode}
               />
             </View>
+          )}
+
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>
+              Quilometragem <Text style={styles.required}>*</Text>
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={kmDisplay}
+              onChangeText={updateKm}
+              placeholder="0"
+              keyboardType="numeric"
+            />
           </View>
+
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>
+              Preço <Text style={styles.required}>*</Text>
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={priceDisplay}
+              onChangeText={updatePrice}
+              placeholder="0"
+              keyboardType="numeric"
+            />
+          </View>
+
+          {shouldShowSkeleton("combustivel") ? (
+            renderSkeletonField("Combustível")
+          ) : (
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>
+                Combustível <Text style={styles.required}>*</Text>
+              </Text>
+              <TextInput
+                style={[styles.input, isEditMode && styles.inputDisabled]}
+                value={formData.combustivel}
+                onChangeText={(text) => updateField("combustivel", text)}
+                placeholder="Combustível será preenchido automaticamente"
+                editable={!isEditMode}
+              />
+            </View>
+          )}
+
+          {shouldShowSkeleton("cor") ? (
+            renderSkeletonField("Cor")
+          ) : (
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Cor</Text>
+              <TextInput
+                style={[styles.input, isEditMode && styles.inputDisabled]}
+                value={formData.cor}
+                onChangeText={(text) => updateField("cor", text)}
+                placeholder="Cor será preenchida automaticamente"
+                editable={!isEditMode}
+              />
+            </View>
+          )}
 
           <View style={styles.formGroup}>
             <Text style={styles.label}>Observação</Text>
@@ -861,31 +691,16 @@ export const VehicleFormScreen: React.FC = () => {
 
           <View style={styles.additionalPhotosSection}>
             <View style={styles.additionalPhotosHeader}>
-              <View style={styles.additionalPhotosTitleContainer}>
-                <Text style={styles.sectionTitle}>Fotos Adicionais</Text>
-                {isLoadingAdditionalPhotos && (
-                  <ActivityIndicator
-                    size="small"
-                    color="#810CD2"
-                    style={styles.additionalPhotosLoader}
-                  />
-                )}
-              </View>
+              <Text style={styles.sectionTitle}>Fotos Adicionais</Text>
               <Text style={styles.photoCounter}>
-                {getAdditionalPhotosCount()}/9 fotos
+                {dynamicPhotos.length}/9 fotos
               </Text>
             </View>
 
-            {getAdditionalPhotosCount() > 0 && (
-              <View style={styles.dynamicPhotosGrid}>
-                {getAdditionalPhotos().map((photo, index) => (
-                  <View
-                    key={photo.field}
-                    style={[
-                      styles.dynamicPhotoSlot,
-                      (index + 1) % 3 === 0 && { marginRight: 0 },
-                    ]}
-                  >
+            {dynamicPhotos.length > 0 && (
+              <View style={styles.photosGrid}>
+                {dynamicPhotos.map((photo) => (
+                  <View key={photo.id} style={styles.photoSlot}>
                     <View style={styles.photoContainer}>
                       <Image
                         source={{ uri: photo.uri }}
@@ -893,7 +708,7 @@ export const VehicleFormScreen: React.FC = () => {
                       />
                       <TouchableOpacity
                         style={styles.removePhotoButton}
-                        onPress={() => removeAdditionalPhoto(photo.field)}
+                        onPress={() => removePhoto(photo.id)}
                       >
                         <Ionicons
                           name="close-circle"
@@ -907,7 +722,7 @@ export const VehicleFormScreen: React.FC = () => {
               </View>
             )}
 
-            {getAdditionalPhotosCount() < 9 && (
+            {dynamicPhotos.length < 9 && (
               <TouchableOpacity
                 style={styles.addPhotoButton}
                 onPress={() => openIntelligentGallery()}
@@ -920,29 +735,35 @@ export const VehicleFormScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
-        <TouchableOpacity
-          style={[
-            styles.saveButton,
-            shouldButtonLookDisabled() && styles.saveButtonDisabled,
-          ]}
-          onPress={handleSavePress}
-          disabled={isButtonDisabled()}
-        >
-          {isLoading ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text
-              style={[
-                styles.saveButtonText,
-                shouldButtonLookDisabled() && styles.saveButtonTextDisabled,
-              ]}
-            >
-              {isEditMode ? "Salvar Alterações" : "Salvar Veículo"}
-            </Text>
+      {!isEditMode && (
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[
+              styles.saveButton,
+              isButtonDisabled() && styles.saveButtonDisabled,
+            ]}
+            onPress={saveVehicle}
+            disabled={isButtonDisabled()}
+          >
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text
+                style={[
+                  styles.saveButtonText,
+                  isButtonDisabled() && styles.saveButtonTextDisabled,
+                ]}
+              >
+                Salvar Veículo
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {getDisabledMessage() && (
+            <Text style={styles.disabledMessage}>{getDisabledMessage()}</Text>
           )}
-        </TouchableOpacity>
-      </View>
+        </View>
+      )}
     </View>
   );
 };
@@ -963,17 +784,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#333",
     marginBottom: 16,
+    marginTop: 8,
   },
   formGroup: {
     marginBottom: 16,
-  },
-  rowContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 16,
-  },
-  halfWidth: {
-    width: "48%",
   },
   label: {
     fontSize: 16,
@@ -981,15 +795,8 @@ const styles = StyleSheet.create({
     color: "#333",
     marginBottom: 8,
   },
-  asterisk: {
+  required: {
     color: "#FF3B30",
-    fontSize: 16,
-  },
-  infoText: {
-    fontSize: 12,
-    color: "#666",
-    marginTop: 4,
-    fontStyle: "italic",
   },
   input: {
     borderWidth: 1,
@@ -999,9 +806,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     backgroundColor: "#fff",
   },
+  inputDisabled: {
+    backgroundColor: "#f5f5f5",
+    color: "#666",
+  },
   textArea: {
     height: 100,
     textAlignVertical: "top",
+  },
+  skeletonInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f8f9ff",
+  },
+  skeletonText: {
+    marginLeft: 8,
+    color: "#666",
+    fontStyle: "italic",
   },
   photosGrid: {
     flexDirection: "row",
@@ -1009,20 +834,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 16,
   },
-  dynamicPhotosGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "flex-start",
-    marginBottom: 16,
-  },
   photoSlot: {
     width: "32%",
     marginBottom: 16,
-  },
-  dynamicPhotoSlot: {
-    width: "30%",
-    marginRight: "5%",
-    marginBottom: 8,
   },
   photoLabel: {
     fontSize: 14,
@@ -1040,6 +854,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#f8f9ff",
     position: "relative",
+  },
+  photoContainerRequired: {
+    borderColor: "#FF3B30",
+    borderStyle: "dashed",
   },
   photoImage: {
     width: "100%",
@@ -1071,13 +889,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 16,
-  },
-  additionalPhotosTitleContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  additionalPhotosLoader: {
-    marginLeft: 8,
   },
   photoCounter: {
     fontSize: 14,

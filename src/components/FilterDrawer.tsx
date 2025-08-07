@@ -139,7 +139,7 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
 
           {/* Tipo de Veículo */}
           <View style={styles.filterGroup}>
-            <Text style={styles.label}>Tipo de Veículo</Text>
+            <Text style={styles.label}>Tipo</Text>
             <TextInput
               style={styles.input}
               value={filter.tipoVeiculo || ""}
@@ -222,15 +222,15 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
             />
           </View>
 
-          {/* Quantidade */}
+          {/* Interessados */}
           <View style={styles.filterGroup}>
-            <Text style={styles.label}>Quantidade</Text>
+            <Text style={styles.label}>Interessados</Text>
             <View style={styles.rangeContainer}>
               <TextInput
                 style={[styles.input, styles.rangeInput]}
-                value={filter.quantidadeMin?.toString() || ""}
+                value={filter.interessadosMin?.toString() || ""}
                 onChangeText={(text) =>
-                  updateFilter("quantidadeMin", text ? parseInt(text) : "")
+                  updateFilter("interessadosMin", text ? parseInt(text) : "")
                 }
                 placeholder="Min"
                 keyboardType="numeric"
@@ -238,9 +238,9 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
               <Text style={styles.rangeText}>até</Text>
               <TextInput
                 style={[styles.input, styles.rangeInput]}
-                value={filter.quantidadeMax?.toString() || ""}
+                value={filter.interessadosMax?.toString() || ""}
                 onChangeText={(text) =>
-                  updateFilter("quantidadeMax", text ? parseInt(text) : "")
+                  updateFilter("interessadosMax", text ? parseInt(text) : "")
                 }
                 placeholder="Max"
                 keyboardType="numeric"

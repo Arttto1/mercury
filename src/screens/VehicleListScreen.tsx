@@ -5,7 +5,6 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Alert,
   RefreshControl,
   ActivityIndicator,
 } from "react-native";
@@ -16,17 +15,23 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Vehicle, VehicleFilter, RootStackParamList } from "../types";
 import { VehicleCard } from "../components/VehicleCard";
 import { FilterDrawer } from "../components/FilterDrawer";
-import { apiService } from "../services/apiService";
+import { apiService, alertService } from "../services";
 import { useAuth } from "../contexts/AuthContext";
 
 type NavigationProp = StackNavigationProp<RootStackParamList, "VehicleList">;
 
 export const VehicleListScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
-  const { logout } = useAuth();
+  const {
+    logout,
+    vehicles,
+    setVehicles,
+    replaceAllVehicles,
+    loadingVehicles,
+    bulkDeleteVehicles,
+  } = useAuth();
   const insets = useSafeAreaInsets();
 
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [filteredVehicles, setFilteredVehicles] = useState<Vehicle[]>([]);
   const [selectedVehicles, setSelectedVehicles] = useState<Set<string>>(
     new Set()
@@ -48,9 +53,28 @@ export const VehicleListScreen: React.FC = () => {
   const fetchVehicles = async () => {
     try {
       const data = await apiService.fetchVehicles();
-      setVehicles(data);
+
+      // Verificar se o array vem com apenas um objeto vazio (significa que não tem veículos no banco)
+      const hasOnlyEmptyObject =
+        data.length === 1 &&
+        (!data[0].id ||
+          data[0].id === "" ||
+          !data[0].nomeModelo ||
+          data[0].nomeModelo === "");
+
+      if (hasOnlyEmptyObject) {
+        console.log(
+          "📋 Array com objeto vazio detectado - sem veículos no banco"
+        );
+        // Substituir por array vazio para mostrar tela de "sem veículos"
+        replaceAllVehicles([]);
+      } else {
+        // For refresh/initial load, use replaceAllVehicles to reset state cleanly
+        // This prevents conflicts with optimistic updates
+        replaceAllVehicles(data);
+      }
     } catch (error) {
-      Alert.alert("Erro", "Não foi possível carregar os veículos");
+      alertService.error("Erro", "Não foi possível carregar os veículos");
       console.error("Fetch vehicles error:", error);
     } finally {
       setIsLoading(false);
@@ -122,14 +146,14 @@ export const VehicleListScreen: React.FC = () => {
               (vehicle) => vehicle.anoModelo <= (value as number)
             );
             break;
-          case "quantidadeMin":
+          case "interessadosMin":
             filtered = filtered.filter(
-              (vehicle) => vehicle.quantidade >= (value as number)
+              (vehicle) => vehicle.interessados >= (value as number)
             );
             break;
-          case "quantidadeMax":
+          case "interessadosMax":
             filtered = filtered.filter(
-              (vehicle) => vehicle.quantidade <= (value as number)
+              (vehicle) => vehicle.interessados <= (value as number)
             );
             break;
         }
@@ -164,31 +188,26 @@ export const VehicleListScreen: React.FC = () => {
 
   const handleBulkDelete = () => {
     if (selectedVehicles.size === 0) {
-      Alert.alert("Aviso", "Selecione pelo menos um veículo");
+      alertService.warning("Aviso", "Selecione pelo menos um veículo");
       return;
     }
 
-    Alert.alert(
+    alertService.confirmDestructive(
       "Confirmar Exclusão",
       `Deseja excluir ${selectedVehicles.size} veículo(s) selecionado(s)?`,
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Excluir",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await apiService.bulkDeleteVehicles(Array.from(selectedVehicles));
-              await fetchVehicles();
-              setSelectedVehicles(new Set());
-              setSelectionMode(false);
-              Alert.alert("Sucesso", "Veículos excluídos com sucesso");
-            } catch (error) {
-              Alert.alert("Erro", "Não foi possível excluir os veículos");
-            }
-          },
-        },
-      ]
+      async () => {
+        try {
+          await bulkDeleteVehicles(Array.from(selectedVehicles));
+          setSelectedVehicles(new Set());
+          setSelectionMode(false);
+          // Não mostrar mais alerta de sucesso - removido conforme padrão
+        } catch (error) {
+          alertService.error("Erro", "Não foi possível excluir os veículos");
+        }
+      },
+      () => {},
+      "Excluir",
+      "Cancelar"
     );
   };
 
@@ -197,13 +216,14 @@ export const VehicleListScreen: React.FC = () => {
   };
 
   const handleLogout = () => {
-    Alert.alert("Sair", "Deseja sair do aplicativo?", [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Sair",
-        onPress: logout,
-      },
-    ]);
+    alertService.confirm(
+      "Sair",
+      "Deseja sair do aplicativo?",
+      logout,
+      () => {},
+      "Sair",
+      "Cancelar"
+    );
   };
 
   const renderVehicleItem = ({ item }: { item: Vehicle }) => (
@@ -213,6 +233,7 @@ export const VehicleListScreen: React.FC = () => {
       onSelect={() => toggleVehicleSelection(item.id)}
       isSelected={selectedVehicles.has(item.id)}
       showSelection={selectionMode}
+      isLoading={loadingVehicles.has(item.id)}
     />
   );
 
@@ -302,7 +323,15 @@ export const VehicleListScreen: React.FC = () => {
       <FlatList
         data={filteredVehicles}
         renderItem={renderVehicleItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => {
+          // Create absolutely unique key considering all states
+          const baseKey = item.id || `unknown-${index}`;
+          const stateKey = item._isUpdating ? "updating" : "stable";
+          const fieldsKey = item._updatingFields
+            ? Object.keys(item._updatingFields).join("-")
+            : "none";
+          return `${baseKey}-${stateKey}-${fieldsKey}-${index}`;
+        }}
         style={styles.list}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
